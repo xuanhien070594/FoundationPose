@@ -1,0 +1,8 @@
+# This file contains all intrinsic parameters of the Intel Realsense D435i
+# Note that the camera is already calibrated in factory and there are no
+# distortion parameters.
+
+fx: 966.804
+fy: 966.804
+x0: 955.617
+y0: 528.355
