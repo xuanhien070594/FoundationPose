@@ -23,6 +23,7 @@ ninja==1.11.1.1
 h5py==3.10.0
 numba==0.59.1
 pybind11==2.12.0
+click
 
 # CV Libraries
 imageio==2.34.0
@@ -80,3 +81,6 @@ warp-lang==1.0.2
 
 # For PyTorch3D
 fvcore==0.1.5.post20221221
+
+# Realsense camera driver
+pyrealsense2

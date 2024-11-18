@@ -12,13 +12,14 @@ import yaml
 
 from datareader import *
 from estimater import *
-from FoundationPose.mask import *
-#from FoundationPose.lcm_systems.pose_publisher import PosePublisher
+from mask import *
+
+# from FoundationPose.lcm_systems.pose_publisher import PosePublisher
 from scipy.spatial.transform import Rotation as R
 
 
 def get_world_T_cam_from_yaml(file_name: str):
-    data_loaded = yaml.safe_load(file)
+    data_loaded = yaml.safe_load(file_name)
     cam_position_x = data_loaded["pose"]["position"]["x"]
     cam_position_y = data_loaded["pose"]["position"]["y"]
     cam_position_z = data_loaded["pose"]["position"]["z"]
@@ -63,11 +64,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mesh_file",
         type=str,
-        default=f"{code_dir}/../assets/cube/cube_v2.obj",
+        default=f"{code_dir}/../assets/cube/cube.obj",
     )
     parser.add_argument("--est_refine_iter", type=int, default=5)
     parser.add_argument("--track_refine_iter", type=int, default=2)
-    parser.add_argument("--debug", type=int, default=1)
+    parser.add_argument("--debug", type=int, default=0)
     parser.add_argument("--debug_dir", type=str, default=f"{code_dir}/debug")
     args = parser.parse_args()
 
@@ -75,7 +76,7 @@ if __name__ == "__main__":
     set_seed(0)
 
     print(f"This is the mesh file: {args.mesh_file}")
-    mesh = trimesh.load(args.mesh_file, force="mesh")
+    mesh = trimesh.load(args.mesh_file, process=False, maintain_order=True)
     print("Loaded mesh file")
 
     debug = args.debug
@@ -131,6 +132,10 @@ if __name__ == "__main__":
 
     # Start streaming
     profile = pipeline.start(config)
+    # frames = pipeline.wait_for_frames()
+    # color_frame = frames.get_color_frame()
+    # import pdb
+    # pdb.set_trace()
 
     # Getting the depth sensor's depth scale (see rs-align example for explanation)
     depth_sensor = profile.get_device().first_depth_sensor()
@@ -153,8 +158,8 @@ if __name__ == "__main__":
     # camera
     cam_K = np.array(
         [
-            [381.8276672363281, 0.0, 320.3140869140625],
-            [0.0, 381.4604187011719, 244.2602081298828],
+            [607.849, 0.0, 326.247],
+            [0.0, 607.719, 248.625],
             [0.0, 0.0, 1.0],
         ]
     )
@@ -169,6 +174,7 @@ time.sleep(3)
 # Streaming loop
 try:
     while Estimating:
+        start_time = time.perf_counter()
         # Get frameset of color and depth
         frames = pipeline.wait_for_frames()
 
@@ -245,7 +251,7 @@ try:
 
         if debug >= 1:
             # center_pose = pose@np.linalg.inv(to_origin)
-            cam_to_object = pose
+            cam_to_object = pose @ np.linalg.inv(to_origin)
             print("pose size: ", pose.shape)
             obj_pose_in_world = world_to_cam @ cam_to_object
 
@@ -272,6 +278,7 @@ try:
         # lcm_pose = PosePublisher()
         # lcm_pose.publish_pose("Jack", obj_pose_in_world)
         i += 1
+        print(f"Pose estimation time: {time.perf_counter() - start_time}")
 
 
 finally:
