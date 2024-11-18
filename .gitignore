@@ -157,3 +157,7 @@ logs/
 !BundleTrack/XMem/inference/data
 run_used.yml
 *.swp
+
+/.idea
+/camera_params/images
+mask.png
