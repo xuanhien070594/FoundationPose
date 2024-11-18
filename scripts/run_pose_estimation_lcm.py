@@ -7,6 +7,8 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 import argparse
 import datetime
+import time
+
 import pyrealsense2 as rs
 import yaml
 
@@ -14,57 +16,39 @@ from datareader import *
 from estimater import *
 from mask import *
 
-# from FoundationPose.lcm_systems.pose_publisher import PosePublisher
-from scipy.spatial.transform import Rotation as R
+from foundationpose.lcm_systems.pose_publisher import PosePublisher
 
 
-def get_world_T_cam_from_yaml(file_name: str):
-    data_loaded = yaml.safe_load(file_name)
-    cam_position_x = data_loaded["pose"]["position"]["x"]
-    cam_position_y = data_loaded["pose"]["position"]["y"]
-    cam_position_z = data_loaded["pose"]["position"]["z"]
-    cam_orientation_x = data_loaded["pose"]["rotation"]["x"]
-    cam_orientation_y = data_loaded["pose"]["rotation"]["y"]
-    cam_orientation_z = data_loaded["pose"]["rotation"]["z"]
+def get_world_T_cam_from_yaml(file_name: str) -> np.ndarray:
+    with open(file_name) as file:
+        data_loaded = yaml.safe_load(file)
+    return np.array(data_loaded["tf_world_to_cam"]["data"]).reshape(4, 4)
 
-    cam_rotation = R.from_rotvec(
-        [cam_orientation_x, cam_orientation_y, cam_orientation_z]
-    )
-    rotation_matrix = cam_rotation.as_matrix()
-    world_to_cam = np.array(
-        [
-            [
-                rotation_matrix[0][0],
-                rotation_matrix[0][1],
-                rotation_matrix[0][2],
-                cam_position_x,
-            ],
-            [
-                rotation_matrix[1][0],
-                rotation_matrix[1][1],
-                rotation_matrix[1][2],
-                cam_position_y,
-            ],
-            [
-                rotation_matrix[2][0],
-                rotation_matrix[2][1],
-                rotation_matrix[2][2],
-                cam_position_z,
-            ],
-            [0, 0, 0, 1],
-        ]
-    )
 
-    return world_to_cam
+def get_intrinsic_matrix_from_yaml(file_name: str) -> np.ndarray:
+    with open(file_name) as file:
+        data_loaded = yaml.safe_load(file)
+    return np.array(data_loaded["camera_matrix"]["data"]).reshape(3, 3)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     code_dir = os.path.dirname(os.path.realpath(__file__))
+    assert code_dir != ""
     parser.add_argument(
         "--mesh_file",
         type=str,
         default=f"{code_dir}/../assets/cube/cube.obj",
+    )
+    parser.add_argument(
+        "--intrinsic_params_file",
+        type=str,
+        default="f{code_dir}/../camera_params/realsense_d435i/cv2_rgb_camera_intrinsics.yaml",
+    )
+    parser.add_argument(
+        "--extrinsic_params_file",
+        type=str,
+        default="f{code_dir}/../camera_params/realsense_d435i/cv2_rgb_camera_extrinsics.yaml",
     )
     parser.add_argument("--est_refine_iter", type=int, default=5)
     parser.add_argument("--track_refine_iter", type=int, default=2)
@@ -132,10 +116,6 @@ if __name__ == "__main__":
 
     # Start streaming
     profile = pipeline.start(config)
-    # frames = pipeline.wait_for_frames()
-    # color_frame = frames.get_color_frame()
-    # import pdb
-    # pdb.set_trace()
 
     # Getting the depth sensor's depth scale (see rs-align example for explanation)
     depth_sensor = profile.get_device().first_depth_sensor()
@@ -143,7 +123,7 @@ if __name__ == "__main__":
     print("Depth Scale is: ", depth_scale)
 
     # We will be removing the background of objects more than
-    #  clipping_distance_in_meters meters away
+    # clipping_distance_in_meters meters away
     clipping_distance_in_meters = 1  # 1 meter
     clipping_distance = clipping_distance_in_meters / depth_scale
 
@@ -153,133 +133,118 @@ if __name__ == "__main__":
     align_to = rs.stream.color
     align = rs.align(align_to)
 
+    cam_K = get_intrinsic_matrix_from_yaml(args.intrinsic_params_file)
+    world_to_cam = get_world_T_cam_from_yaml(args.extrinsic_params_file)
+
+    lcm_pose_publisher = PosePublisher()
+
+    # ------------ Pose Estimation Loop ------------ #
     i = 0
-    # Make sure to update this value according to the current intrinsics from the
-    # camera
-    cam_K = np.array(
-        [
-            [607.849, 0.0, 326.247],
-            [0.0, 607.719, 248.625],
-            [0.0, 0.0, 1.0],
-        ]
-    )
+    estimating = True
+    time.sleep(3)  # Sleep for 3 seconds to allow the camera to warm up
 
-    # Get camera extrinsics.
-    # world_to_cam = get_world_T_cam_from_yaml()
-    world_to_cam = np.eye(4)
+    try:
+        while estimating:
+            start_time = time.perf_counter()
+            # Get frameset of color and depth
+            frames = pipeline.wait_for_frames()
 
-    ################## HERE ##################
-Estimating = True
-time.sleep(3)
-# Streaming loop
-try:
-    while Estimating:
-        start_time = time.perf_counter()
-        # Get frameset of color and depth
-        frames = pipeline.wait_for_frames()
+            # Align the depth frame to color frame
+            aligned_frames = align.process(frames)
 
-        # Align the depth frame to color frame
-        aligned_frames = align.process(frames)
+            # Get aligned frames
+            aligned_depth_frame = (
+                aligned_frames.get_depth_frame()
+            )  # aligned_depth_frame is a 640x480 depth image
+            color_frame = aligned_frames.get_color_frame()
 
-        # Get aligned frames
-        aligned_depth_frame = (
-            aligned_frames.get_depth_frame()
-        )  # aligned_depth_frame is a 640x480 depth image
-        color_frame = aligned_frames.get_color_frame()
+            # Validate that both frames are valid
+            if not aligned_depth_frame or not color_frame:
+                continue
 
-        # Validate that both frames are valid
-        if not aligned_depth_frame or not color_frame:
-            continue
+            depth_image = np.asanyarray(aligned_depth_frame.get_data()) / 1e3
+            color_image = np.asanyarray(color_frame.get_data())
 
-        depth_image = np.asanyarray(aligned_depth_frame.get_data()) / 1e3
-        color_image = np.asanyarray(color_frame.get_data())
+            # Scale depth image to mm
+            depth_image_scaled = (depth_image * depth_scale * 1000).astype(np.float32)
 
-        # Scale depth image to mm
-        depth_image_scaled = (depth_image * depth_scale * 1000).astype(np.float32)
+            if cv2.waitKey(1) == 13:
+                estimating = False
+                break
 
-        # cv2.imshow('color', color_image)
-        # cv2.imshow('depth', depth_image)
+            logging.info(f"i:{i}")
 
-        if cv2.waitKey(1) == 13:
-            Estimating = False
-            break
-
-        logging.info(f"i:{i}")
-
-        H, W = cv2.resize(color_image, (640, 480)).shape[:2]
-        color = cv2.resize(color_image, (W, H), interpolation=cv2.INTER_NEAREST)
-        depth = cv2.resize(depth_image_scaled, (W, H), interpolation=cv2.INTER_NEAREST)
-
-        depth[(depth < 0.1) | (depth >= np.inf)] = 0
-
-        if i == 0:
-            if len(mask.shape) == 3:
-                for c in range(3):
-                    if mask[..., c].sum() > 0:
-                        mask = mask[..., c]
-                        break
-            mask = (
-                cv2.resize(mask, (W, H), interpolation=cv2.INTER_NEAREST)
-                .astype(bool)
-                .astype(np.uint8)
+            H, W = cv2.resize(color_image, (640, 480)).shape[:2]
+            color = cv2.resize(color_image, (W, H), interpolation=cv2.INTER_NEAREST)
+            depth = cv2.resize(
+                depth_image_scaled, (W, H), interpolation=cv2.INTER_NEAREST
             )
 
-            pose = est.register(
-                K=cam_K,
-                rgb=color,
-                depth=depth,
-                ob_mask=mask,
-                iteration=args.est_refine_iter,
-            )
+            depth[(depth < 0.1) | (depth >= np.inf)] = 0
 
-            if debug >= 3:
-                m = mesh.copy()
-                m.apply_transform(pose)
-                m.export(f"{debug_dir}/model_tf.obj")
-                xyz_map = depth2xyzmap(depth, cam_K)
-                valid = depth >= 0.1
-                pcd = toOpen3dCloud(xyz_map[valid], color[valid])
-                o3d.io.write_point_cloud(f"{debug_dir}/scene_complete.ply", pcd)
+            if i == 0:
+                if len(mask.shape) == 3:
+                    for c in range(3):
+                        if mask[..., c].sum() > 0:
+                            mask = mask[..., c]
+                            break
+                mask = (
+                    cv2.resize(mask, (W, H), interpolation=cv2.INTER_NEAREST)
+                    .astype(bool)
+                    .astype(np.uint8)
+                )
 
-        else:
-            pose = est.track_one(
-                rgb=color, depth=depth, K=cam_K, iteration=args.track_refine_iter
-            )
+                pose = est.register(
+                    K=cam_K,
+                    rgb=color,
+                    depth=depth,
+                    ob_mask=mask,
+                    iteration=args.est_refine_iter,
+                )
 
-        os.makedirs(f"{debug_dir}/ob_in_cam", exist_ok=True)
-        np.savetxt(f"{debug_dir}/ob_in_cam/{i}.txt", pose.reshape(4, 4))
+                if debug >= 3:
+                    m = mesh.copy()
+                    m.apply_transform(pose)
+                    m.export(f"{debug_dir}/model_tf.obj")
+                    xyz_map = depth2xyzmap(depth, cam_K)
+                    valid = depth >= 0.1
+                    pcd = toOpen3dCloud(xyz_map[valid], color[valid])
+                    o3d.io.write_point_cloud(f"{debug_dir}/scene_complete.ply", pcd)
 
-        if debug >= 1:
-            # center_pose = pose@np.linalg.inv(to_origin)
+            else:
+                pose = est.track_one(
+                    rgb=color, depth=depth, K=cam_K, iteration=args.track_refine_iter
+                )
             cam_to_object = pose @ np.linalg.inv(to_origin)
-            print("pose size: ", pose.shape)
             obj_pose_in_world = world_to_cam @ cam_to_object
 
-            print("This is the object pose" + str(obj_pose_in_world))
-            vis = draw_posed_3d_box(
-                cam_K, img=color, ob_in_cam=cam_to_object, bbox=bbox
+            if debug >= 1:
+                os.makedirs(f"{debug_dir}/ob_in_cam", exist_ok=True)
+                np.savetxt(f"{debug_dir}/ob_in_cam/{i}.txt", pose.reshape(4, 4))
+                vis = draw_posed_3d_box(
+                    cam_K, img=color, ob_in_cam=cam_to_object, bbox=bbox
+                )
+                vis = draw_xyz_axis(
+                    color,
+                    ob_in_cam=cam_to_object,
+                    scale=0.1,
+                    K=cam_K,
+                    thickness=3,
+                    transparency=0,
+                    is_input_rgb=True,
+                )
+                cv2.imshow("1", vis[..., ::-1])
+                cv2.waitKey(1)
+
+            if debug >= 2:
+                os.makedirs(f"{debug_dir}/track_vis", exist_ok=True)
+                imageio.imwrite(f"{debug_dir}/track_vis/{i}.png", vis)
+
+            lcm_pose_publisher.pub_pose(
+                obj_pose_in_world, int(time.perf_counter() * 1e6)
             )
-            vis = draw_xyz_axis(
-                color,
-                ob_in_cam=cam_to_object,
-                scale=0.1,
-                K=cam_K,
-                thickness=3,
-                transparency=0,
-                is_input_rgb=True,
-            )
-            cv2.imshow("1", vis[..., ::-1])
-            cv2.waitKey(1)
+            i += 1
+            print(f"Pose estimation time: {time.perf_counter() - start_time}")
 
-        if debug >= 2:
-            os.makedirs(f"{debug_dir}/track_vis", exist_ok=True)
-            imageio.imwrite(f"{debug_dir}/track_vis/{i}.png", vis)
-
-        # lcm_pose = PosePublisher()
-        # lcm_pose.publish_pose("Jack", obj_pose_in_world)
-        i += 1
-        print(f"Pose estimation time: {time.perf_counter() - start_time}")
-
-
-finally:
-    pipeline.stop()
+    finally:
+        pipeline.stop()
