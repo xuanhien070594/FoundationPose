@@ -1,10 +1,11 @@
 """This module provides a class to handle Charuco boards."""
 
-import cv2
 import json
 import os
 import pickle
 import typing
+
+import cv2
 import numpy as np
 
 
@@ -258,7 +259,7 @@ class CharucoBoardHandler:
         if visualize:
             cv2.destroyAllWindows()
 
-        return all_corners, all_ids, img.shape[:2]
+        return all_corners, all_ids, (img.shape[1], img.shape[0])
 
     def calibrate(
         self,
