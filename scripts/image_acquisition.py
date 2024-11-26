@@ -80,7 +80,6 @@ class WebcamImageAcquisition(ImageAcquisition):
     def set_camera_settings(self) -> None:
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.settings.width)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.settings.height)
-        # self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 0)
 
     def capture_image(self) -> np.ndarray:
@@ -206,7 +205,7 @@ def main(camera_type: str, webcam_alias: str, image_folder: str, show_img: bool)
     while True:
         if camera_type == "webcam":
             camera = WebcamImageAcquisition(
-                WebCameraSettings(camera_alias=webcam_alias)
+                WebCameraSettings(camera_alias=webcam_alias, frame_rate=1)
             )
         elif camera_type == "realsense":
             camera = RealsenseImageAcquisition(

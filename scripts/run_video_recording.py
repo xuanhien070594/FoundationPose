@@ -1,169 +1,189 @@
-"""This script is used to record video with visualization of estimated pose and target pose using webcam."""
+"""
+This script records video with visualization of estimated pose and target pose using a webcam.
+"""
 
 import pathlib
 import select
+import signal
+import sys
+import time
+from datetime import datetime
+from threading import Event
 
 import click
+import cv2
+import lcm
 import numpy as np
 import yaml
-import cv2
-import time
-import lcm
-from datetime import datetime
+from foundationpose.lcm_systems.pose_subscriber import CubePoseLcmSubscriber
+from tqdm import tqdm
+
+from Utils import draw_xyz_axis, draw_posed_3d_box
 from image_acquisition import (
     WebcamImageAcquisition,
     WebCameraSettings,
     create_folder_if_not_exists,
 )
-from Utils import draw_xyz_axis, draw_posed_3d_box
-from foundationpose.lcm_systems.pose_subscriber import CubePoseLcmSubscriber
 
+# Constants for colors
 GREEN = (0, 255, 0)
 PURPLE = (255, 51, 255)
 
-
-def get_cam_T_world_from_yaml(file_name: str) -> np.ndarray:
-    with open(file_name) as file:
-        data_loaded = yaml.safe_load(file)
-    return np.array(data_loaded["tf_world_to_camera"]["data"]).reshape(4, 4)
+# Global stop event
+stop_event = Event()
 
 
-def get_intrinsic_matrix_from_yaml(file_name: str) -> np.ndarray:
-    with open(file_name) as file:
-        data_loaded = yaml.safe_load(file)
-    return np.array(data_loaded["camera_matrix"]["data"]).reshape(3, 3)
+# Signal handling for graceful shutdown
+def handle_signal(signum, frame):
+    print("\nSignal received. Stopping recording...")
+    stop_event.set()
+
+
+signal.signal(signal.SIGINT, handle_signal)  # Handle Ctrl-C
+signal.signal(signal.SIGTERM, handle_signal)  # Handle SIGTERM
+
+
+# Utility functions
+def load_yaml_matrix(file_path: str, key: str) -> np.ndarray:
+    """Load a matrix from a YAML file."""
+    with open(file_path) as file:
+        data = yaml.safe_load(file)
+    return np.array(data[key]["data"]).reshape(
+        -1, 4 if key == "tf_world_to_camera" else 3
+    )
 
 
 def draw_axes_and_bbox(
-    frame: np.ndarray,
-    intrinsic_matrix: np.ndarray,
-    cam_T: np.ndarray,
-    bbox: np.ndarray,
-    axis_scale: float = 0.05,
-    line_thickness: float = 2,
-    line_transparency: float = 0,
-    is_input_rgb: bool = True,
-    line_color: bool = None,
+    frame, intrinsic_matrix, cam_T, bbox, axis_scale=0.05, line_color=None
 ):
+    """Annotate a frame with axes and bounding box."""
     annotated = draw_xyz_axis(
-        frame,
-        ob_in_cam=cam_T,
-        scale=axis_scale,
-        K=intrinsic_matrix,
-        thickness=line_thickness,
-        transparency=line_transparency,
-        is_input_rgb=is_input_rgb,
+        frame, ob_in_cam=cam_T, scale=axis_scale, K=intrinsic_matrix, thickness=2
     )
-    annotated = draw_posed_3d_box(
+    return draw_posed_3d_box(
         intrinsic_matrix,
         img=annotated,
         ob_in_cam=cam_T,
         bbox=bbox,
         line_color=line_color,
     )
-    return annotated
 
 
-@click.command
+def annotate_and_save_frames(
+    frames, poses, targets, video_writer, intrinsic_matrix, bbox
+):
+    """Add annotations to frames and save them to a video."""
+    print(f"There are total {len(frames)} frames.")
+    print("Annotating and saving video...")
+
+    for frame, cam_T_object, cam_T_target in tqdm(
+        zip(frames, poses, targets),
+        total=len(frames),
+        desc="Processing frames",
+        unit="frame",
+    ):
+        if frame is None:
+            continue
+        annotated_frame = draw_axes_and_bbox(
+            frame, intrinsic_matrix, cam_T_object, bbox, line_color=GREEN
+        )
+        annotated_frame = draw_axes_and_bbox(
+            annotated_frame, intrinsic_matrix, cam_T_target, bbox, line_color=PURPLE
+        )
+        video_writer.write(annotated_frame)
+
+
+# Main script
+@click.command()
 @click.option(
-    "--webcam_alias",
-    type=str,
-    default="brio",
-    help="Alias for the webcam to be used for recording",
+    "--webcam_alias", type=str, default="brio", help="Alias for the webcam to use."
 )
-@click.option(
-    "--video_folder", type=str, help="Path to the folder that stores the video files"
-)
+@click.option("--video_folder", type=str, help="Path to store recorded video files.")
 @click.option(
     "--intrinsic_calibration_filename",
     type=str,
     default="cv2_rgb_camera_intrinsics.yaml",
-    help="""Filename used for saving intrinsic calibration
-                        data or loading it""",
+    help="File for intrinsic camera calibration data.",
 )
 @click.option(
     "--extrinsic_calibration_filename",
     type=str,
     default="cv2_rgb_camera_extrinsics.yaml",
-    help="""Filename used for saving intrinsic calibration
-                         data.""",
+    help="File for extrinsic camera calibration data.",
 )
 def main(
-    webcam_alias: str,
-    video_folder: str,
-    intrinsic_calibration_filename: str,
-    extrinsic_calibration_filename: str,
+    webcam_alias,
+    video_folder,
+    intrinsic_calibration_filename,
+    extrinsic_calibration_filename,
 ):
+    # Setup directories and file paths
     code_dir = pathlib.Path(__file__).resolve().parent
     video_folder = pathlib.Path(video_folder)
     create_folder_if_not_exists(video_folder)
-    video_file = pathlib.Path(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
+    video_file = datetime.now().strftime("%Y%m%d_%H%M%S") + ".mp4"
     video_path = video_folder / video_file
 
+    # Load camera calibration data
     camera_params_dir = code_dir / "../camera_params/brio_webcam"
-    intrinsic_calibration_filepath = camera_params_dir / intrinsic_calibration_filename
-    extrinsic_calibration_filepath = camera_params_dir / extrinsic_calibration_filename
-    cam_T_world = get_cam_T_world_from_yaml(extrinsic_calibration_filepath)
-    intrinsic_matrix = get_intrinsic_matrix_from_yaml(intrinsic_calibration_filepath)
-
-    # Define the estimated and target pose of the cube
-    cur_estimated_cube_pose = np.eye(4)
-    cur_estimated_cube_pose[:3, 3] = np.array([0.0, 0.0, 0.0325])
-    cur_target_cube_pose = np.eye(4)
-    cur_target_cube_pose[:3, 3] = np.array([0.0, 0.0, 0.1])
-    bbox = np.array([[-0.0325, -0.0325, -0.0325], [0.0325, 0.0325, 0.0325]])
-
-    # waiting_state_lcm_msg_timeout = 1e-4
-    lc = lcm.LCM("udpm://239.255.76.67:7667?ttl=1")
-    cube_state_lcm_channel = "CUBE_STATE"
-    waiting_state_lcm_msg_timeout = 1e-4
-    cube_state_subscriber = CubePoseLcmSubscriber(
-        lc, cube_state_lcm_channel, waiting_state_lcm_msg_timeout
+    intrinsic_matrix = load_yaml_matrix(
+        camera_params_dir / intrinsic_calibration_filename, "camera_matrix"
+    )
+    cam_T_world = load_yaml_matrix(
+        camera_params_dir / extrinsic_calibration_filename, "tf_world_to_camera"
     )
 
+    # Cube poses
+    cur_estimated_pose = np.eye(4)
+    cur_estimated_pose[:3, 3] = [0.0, 0.0, 0.0325]  # Example translation
+    cur_target_pose = np.eye(4)
+    cur_target_pose[:3, 3] = [0.0, 0.0, 0.1]  # Example translation
+    bbox = np.array([[-0.0325, -0.0325, -0.0325], [0.0325, 0.0325, 0.0325]])
+
+    # Initialize LCM and camera
+    lc = lcm.LCM("udpm://239.255.76.67:7667?ttl=1")
+    cube_state_subscriber = CubePoseLcmSubscriber(lc, "CUBE_STATE", timeout=1e-4)
     video_cap = WebcamImageAcquisition(WebCameraSettings(webcam_alias))
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     video_writer = cv2.VideoWriter(
         video_path.as_posix(),
-        fourcc,
+        cv2.VideoWriter_fourcc(*"mp4v"),
         video_cap.settings.frame_rate,
         (video_cap.settings.width, video_cap.settings.height),
     )
-    time.sleep(3)  # Wait for the camera to stabilize
+    time.sleep(3)  # Allow camera to stabilize
 
-    while True:
-        rfds, wfds, efds = select.select(
-            [lc.fileno()], [], [], cube_state_subscriber.timeout
-        )
-        if rfds:
+    # Frame storage
+    frames, estimated_poses, target_poses = [], [], []
+
+    # Start capturing frames
+    print("Recording... Press Ctrl-C to stop.")
+    while not stop_event.is_set():
+        if select.select([lc.fileno()], [], [], cube_state_subscriber.timeout)[0]:
             lc.handle()
 
-        cam_T_object = cam_T_world @ cur_estimated_cube_pose
-        cam_T_target = cam_T_world @ cur_target_cube_pose
-
         frame = video_cap.capture_image()
+        cam_T_object = cam_T_world @ cur_estimated_pose
+        cam_T_target = cam_T_world @ cur_target_pose
 
-        annotated_frame = draw_axes_and_bbox(
-            frame, intrinsic_matrix, cam_T_object, bbox, line_color=GREEN
+        frames.append(frame)
+        estimated_poses.append(cam_T_object)
+        target_poses.append(cam_T_target)
+
+    # Annotate and save frames if recording was interrupted
+    if stop_event.is_set() and frames:
+        annotate_and_save_frames(
+            frames, estimated_poses, target_poses, video_writer, intrinsic_matrix, bbox
         )
-        annotated_frame = draw_axes_and_bbox(
-            annotated_frame,
-            intrinsic_matrix,
-            cam_T_target,
-            bbox,
-            line_color=PURPLE,
-        )
-        video_writer.write(annotated_frame)
 
-        cv2.imshow("frame", annotated_frame)
-        c = cv2.waitKey(1)
-        if c & 0xFF == ord("q"):
-            break
-
+    # Cleanup resources
     video_cap.close_connection()
     video_writer.release()
     cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
