@@ -30,7 +30,7 @@ def create_mask():
 
     try:
         # Wait for 1 second to allow the camera to warm up
-        time.sleep(1)
+        time.sleep(3)
         # Wait for a coherent pair of frames: depth and color
         frames = pipeline.wait_for_frames()
         color_frame = frames.get_color_frame()

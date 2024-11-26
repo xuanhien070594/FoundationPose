@@ -19,6 +19,7 @@ class WebCameraSettings:
     camera_alias: str
     width: int = 1920
     height: int = 1080
+    frame_rate: int = 30
 
 
 @dataclass
@@ -79,6 +80,8 @@ class WebcamImageAcquisition(ImageAcquisition):
     def set_camera_settings(self) -> None:
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.settings.width)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.settings.height)
+        # self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 0)
 
     def capture_image(self) -> np.ndarray:
         _, img = self.camera.read()
@@ -199,20 +202,21 @@ def main(camera_type: str, webcam_alias: str, image_folder: str, show_img: bool)
     image_folder_path = Path(image_folder) / f"{camera_type}_{timestamp}"
     create_folder_if_not_exists(image_folder_path)
 
-    if camera_type == "webcam":
-        camera = WebcamImageAcquisition(WebCameraSettings(camera_alias=webcam_alias))
-    elif camera_type == "realsense":
-        camera = RealsenseImageAcquisition(
-            RealSenseCameraSettings()
-        )  # TODO: Configure settings from CLI
-    else:
-        raise ValueError("Invalid camera type")
-    time.sleep(
-        3
-    )  # Important: Allow time for the camera to warm up, if not returned images will be black
-
     img_count = 0
     while True:
+        if camera_type == "webcam":
+            camera = WebcamImageAcquisition(
+                WebCameraSettings(camera_alias=webcam_alias)
+            )
+        elif camera_type == "realsense":
+            camera = RealsenseImageAcquisition(
+                RealSenseCameraSettings()
+            )  # TODO: Configure settings from CLI
+        else:
+            raise ValueError("Invalid camera type")
+        time.sleep(
+            1
+        )  # Important: Allow time for the camera to warm up, if not returned images will be black
         img = camera.capture_image()
         print(f"Successfully captured image\n")
 
@@ -230,8 +234,10 @@ def main(camera_type: str, webcam_alias: str, image_folder: str, show_img: bool)
         if continue_acquire_img != "y":
             break
 
-    # When everything done, release the capture
-    camera.close_connection()
+        img_count += 1
+
+        # When everything done, release the capture
+        camera.close_connection()
 
 
 if __name__ == "__main__":
