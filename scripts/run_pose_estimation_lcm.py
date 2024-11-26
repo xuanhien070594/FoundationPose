@@ -16,13 +16,17 @@ from datareader import *
 from estimater import *
 from mask import *
 
-from foundationpose.lcm_systems.pose_publisher import PosePublisher
+from foundationpose.lcm_systems.pose_publisher import CubePoseLcmPublisher
 
 
 def get_world_T_cam_from_yaml(file_name: str) -> np.ndarray:
     with open(file_name) as file:
         data_loaded = yaml.safe_load(file)
-    return np.array(data_loaded["tf_world_to_cam"]["data"]).reshape(4, 4)
+    cam_T_world = np.array(data_loaded["tf_world_to_camera"]["data"]).reshape(4, 4)
+    world_T_cam = np.eye(4)
+    world_T_cam[:3, :3] = cam_T_world[:3, :3].T
+    world_T_cam[:3, 3] = -cam_T_world[:3, :3].T @ cam_T_world[:3, 3]
+    return world_T_cam
 
 
 def get_intrinsic_matrix_from_yaml(file_name: str) -> np.ndarray:
@@ -43,12 +47,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--intrinsic_params_file",
         type=str,
-        default="f{code_dir}/../camera_params/realsense_d435i/cv2_rgb_camera_intrinsics.yaml",
+        default=f"{code_dir}/../camera_params/realsense_d435i/cv2_rgb_camera_intrinsics.yaml",
     )
     parser.add_argument(
         "--extrinsic_params_file",
         type=str,
-        default="f{code_dir}/../camera_params/realsense_d435i/cv2_rgb_camera_extrinsics.yaml",
+        default=f"{code_dir}/../camera_params/realsense_d435i/cv2_rgb_camera_extrinsics.yaml",
     )
     parser.add_argument("--est_refine_iter", type=int, default=5)
     parser.add_argument("--track_refine_iter", type=int, default=2)
@@ -111,8 +115,8 @@ if __name__ == "__main__":
         print("The demo requires Depth camera with Color sensor")
         exit(0)
 
-    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-    config.enable_stream(rs.stream.color, 640, 480, rs.format.rgb8, 30)
+    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 60)
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.rgb8, 60)
 
     # Start streaming
     profile = pipeline.start(config)
@@ -135,8 +139,11 @@ if __name__ == "__main__":
 
     cam_K = get_intrinsic_matrix_from_yaml(args.intrinsic_params_file)
     world_to_cam = get_world_T_cam_from_yaml(args.extrinsic_params_file)
+    pose_correction = np.array(
+        [[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]]
+    )
 
-    lcm_pose_publisher = PosePublisher()
+    lcm_pose_publisher = CubePoseLcmPublisher()
 
     # ------------ Pose Estimation Loop ------------ #
     i = 0
@@ -215,7 +222,8 @@ if __name__ == "__main__":
                 pose = est.track_one(
                     rgb=color, depth=depth, K=cam_K, iteration=args.track_refine_iter
                 )
-            cam_to_object = pose @ np.linalg.inv(to_origin)
+            # cam_to_object = pose @ np.linalg.inv(to_origin)
+            cam_to_object = pose @ pose_correction
             obj_pose_in_world = world_to_cam @ cam_to_object
 
             if debug >= 1:
@@ -243,6 +251,7 @@ if __name__ == "__main__":
             lcm_pose_publisher.pub_pose(
                 obj_pose_in_world, int(time.perf_counter() * 1e6)
             )
+            print(obj_pose_in_world)
             i += 1
             print(f"Pose estimation time: {time.perf_counter() - start_time}")
 

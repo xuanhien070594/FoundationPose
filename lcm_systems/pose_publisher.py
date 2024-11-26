@@ -1,11 +1,12 @@
 import lcm
 import numpy as np
-from lcm_types.lcmt_object_state import lcmt_object_state
+from foundationpose.lcm_systems.lcm_types.lcmt_object_state import lcmt_object_state
+from scipy.spatial.transform import Rotation
 
 
 class CubePoseLcmPublisher:
-    def __init__(self):
-        self.cube_pose_lcm_channel = "CUBE_STATE"
+    def __init__(self, lcm_channel: str = "CUBE_STATE"):
+        self.cube_pose_lcm_channel = lcm_channel
         self.lc = lcm.LCM()
 
     def pub_pose(self, cube_pose, timestamp):
@@ -30,12 +31,8 @@ class CubePoseLcmPublisher:
             "cube_vy",
             "cube_vz",
         ]
-        pose_msg.position = np.concatenate(
-            [
-                cube_pose.orientation[[3]],
-                cube_pose.orientation[:3],
-                cube_pose.position,
-            ]
-        ).tolist()
+        cube_pos = cube_pose[:3, 3]
+        cube_quat = Rotation.from_matrix(cube_pose[:3, :3]).as_quat(scalar_first=True)
+        pose_msg.position = np.concatenate([cube_quat, cube_pos]).tolist()
         pose_msg.velocity = np.zeros(pose_msg.num_velocities).tolist()
         self.lc.publish(self.cube_pose_lcm_channel, pose_msg.encode())

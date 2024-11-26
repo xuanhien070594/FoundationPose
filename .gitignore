@@ -161,3 +161,5 @@ run_used.yml
 /.idea
 /camera_params/images
 mask.png
+
+*.mp4
