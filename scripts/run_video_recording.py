@@ -135,9 +135,9 @@ def main(
 
     # Cube poses
     cur_estimated_pose = np.eye(4)
-    cur_estimated_pose[:3, 3] = [0.0, 0.0, 0.0325]  # Example translation
+    cur_estimated_pose[:3, 3] = [-0.0325, 0.0325, 0.0325]  # Example translation
     cur_target_pose = np.eye(4)
-    cur_target_pose[:3, 3] = [0.0, 0.0, 0.1]  # Example translation
+    cur_target_pose[:3, 3] = [0.15, 0.15, 0.1]  # Example translation
     bbox = np.array([[-0.0325, -0.0325, -0.0325], [0.0325, 0.0325, 0.0325]])
 
     # Initialize LCM and camera
@@ -162,6 +162,7 @@ def main(
             lc.handle()
 
         frame = video_cap.capture_image()
+        cur_estimated_pose = cube_state_subscriber.get_data()
         cam_T_object = cam_T_world @ cur_estimated_pose
         cam_T_target = cam_T_world @ cur_target_pose
 
