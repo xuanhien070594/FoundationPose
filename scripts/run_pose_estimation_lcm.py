@@ -47,14 +47,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--intrinsic_params_file",
         type=str,
-        default=f"{code_dir}/../camera_params/realsense_d435i/cv2_rgb_camera_intrinsics.yaml",
+        default=f"{code_dir}/../camera_params/realsense_d435i/cv2_rgb_camera_intrinsics_848_480.yaml",
     )
     parser.add_argument(
         "--extrinsic_params_file",
         type=str,
-        default=f"{code_dir}/../camera_params/realsense_d435i/cv2_rgb_camera_extrinsics.yaml",
+        default=f"{code_dir}/../camera_params/realsense_d435i/cv2_rgb_camera_extrinsics_848_480.yaml",
     )
-    parser.add_argument("--est_refine_iter", type=int, default=5)
+    parser.add_argument("--est_refine_iter", type=int, default=20)
     parser.add_argument("--track_refine_iter", type=int, default=2)
     parser.add_argument("--debug", type=int, default=0)
     parser.add_argument("--debug_dir", type=str, default=f"{code_dir}/debug")
@@ -115,8 +115,8 @@ if __name__ == "__main__":
         print("The demo requires Depth camera with Color sensor")
         exit(0)
 
-    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 60)
-    config.enable_stream(rs.stream.color, 640, 480, rs.format.rgb8, 60)
+    config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 60)
+    config.enable_stream(rs.stream.color, 848, 480, rs.format.rgb8, 60)
 
     # Start streaming
     profile = pipeline.start(config)
@@ -138,7 +138,7 @@ if __name__ == "__main__":
     align = rs.align(align_to)
 
     cam_K = get_intrinsic_matrix_from_yaml(args.intrinsic_params_file)
-    world_to_cam = get_world_T_cam_from_yaml(args.extrinsic_params_file)
+    world_T_cam = get_world_T_cam_from_yaml(args.extrinsic_params_file)
     pose_correction = np.array(
         [[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]]
     )
@@ -160,9 +160,7 @@ if __name__ == "__main__":
             aligned_frames = align.process(frames)
 
             # Get aligned frames
-            aligned_depth_frame = (
-                aligned_frames.get_depth_frame()
-            )  # aligned_depth_frame is a 640x480 depth image
+            aligned_depth_frame = aligned_frames.get_depth_frame()
             color_frame = aligned_frames.get_color_frame()
 
             # Validate that both frames are valid
@@ -181,7 +179,7 @@ if __name__ == "__main__":
 
             logging.info(f"i:{i}")
 
-            H, W = cv2.resize(color_image, (640, 480)).shape[:2]
+            H, W = cv2.resize(color_image, (848, 480)).shape[:2]
             color = cv2.resize(color_image, (W, H), interpolation=cv2.INTER_NEAREST)
             depth = cv2.resize(
                 depth_image_scaled, (W, H), interpolation=cv2.INTER_NEAREST
@@ -222,25 +220,39 @@ if __name__ == "__main__":
                 pose = est.track_one(
                     rgb=color, depth=depth, K=cam_K, iteration=args.track_refine_iter
                 )
-            # cam_to_object = pose @ np.linalg.inv(to_origin)
             cam_to_object = pose @ pose_correction
-            obj_pose_in_world = world_to_cam @ cam_to_object
+            cam_to_object[2, 3] -= 0.005
+            obj_pose_in_world = world_T_cam @ cam_to_object
 
             if debug >= 1:
                 os.makedirs(f"{debug_dir}/ob_in_cam", exist_ok=True)
                 np.savetxt(f"{debug_dir}/ob_in_cam/{i}.txt", pose.reshape(4, 4))
+
                 vis = draw_posed_3d_box(
-                    cam_K, img=color, ob_in_cam=cam_to_object, bbox=bbox
+                    cam_K, img=color, ob_in_cam=cam_to_object, bbox=bbox, linewidth=1
                 )
                 vis = draw_xyz_axis(
                     color,
                     ob_in_cam=cam_to_object,
                     scale=0.1,
                     K=cam_K,
-                    thickness=3,
+                    thickness=1,
                     transparency=0,
                     is_input_rgb=True,
                 )
+
+                # world_T_object = np.eye(4)
+                # world_T_object[:3, 3] = np.array([-0.0325, 0.0325, 0.0325])
+                # cam_to_object_1 = cam_T_world @ world_T_object
+                # vis = draw_xyz_axis(
+                #     vis,
+                #     ob_in_cam=cam_to_object_1,
+                #     scale=0.1,
+                #     K=cam_K,
+                #     thickness=1,
+                #     transparency=0,
+                #     is_input_rgb=True,
+                # )
                 cv2.imshow("1", vis[..., ::-1])
                 cv2.waitKey(1)
 

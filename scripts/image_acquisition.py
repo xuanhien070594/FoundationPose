@@ -209,7 +209,7 @@ def main(camera_type: str, webcam_alias: str, image_folder: str, show_img: bool)
             )
         elif camera_type == "realsense":
             camera = RealsenseImageAcquisition(
-                RealSenseCameraSettings()
+                RealSenseCameraSettings(rgb_width=848, rgb_height=480)
             )  # TODO: Configure settings from CLI
         else:
             raise ValueError("Invalid camera type")

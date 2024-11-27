@@ -54,12 +54,14 @@ def load_yaml_matrix(file_path: str, key: str) -> np.ndarray:
 
 
 def draw_axes_and_bbox(
-    frame, intrinsic_matrix, cam_T, bbox, axis_scale=0.05, line_color=None
+    frame, intrinsic_matrix, cam_T, bbox, axis_scale=0.05, line_color=None, skip_bbox=False
 ):
     """Annotate a frame with axes and bounding box."""
     annotated = draw_xyz_axis(
         frame, ob_in_cam=cam_T, scale=axis_scale, K=intrinsic_matrix, thickness=2
     )
+    if skip_bbox:
+        return annotated
     return draw_posed_3d_box(
         intrinsic_matrix,
         img=annotated,
@@ -133,11 +135,11 @@ def main(
         camera_params_dir / extrinsic_calibration_filename, "tf_world_to_camera"
     )
 
-    # Cube poses
+    # Default poses and bounding box
     cur_estimated_pose = np.eye(4)
-    cur_estimated_pose[:3, 3] = [-0.0325, 0.0325, 0.0325]  # Example translation
+    cur_estimated_pose[:3, 3] = [-0.0325, 0.0325, 0.0325]
     cur_target_pose = np.eye(4)
-    cur_target_pose[:3, 3] = [0.15, 0.15, 0.1]  # Example translation
+    cur_target_pose[:3, 3] = [0.0, 0.0, 0.1]
     bbox = np.array([[-0.0325, -0.0325, -0.0325], [0.0325, 0.0325, 0.0325]])
 
     # Initialize LCM and camera
