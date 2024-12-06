@@ -83,7 +83,9 @@ class WebcamImageAcquisition(ImageAcquisition):
         self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 0)
 
     def capture_image(self) -> np.ndarray:
-        _, img = self.camera.read()
+        ret, img = self.camera.read()
+        if ret is None:
+            print("Failed to capture image")
         return img
 
     def close_connection(self) -> None:

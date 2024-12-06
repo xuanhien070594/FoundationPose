@@ -55,9 +55,11 @@ import math, glob, re, copy
 from transformations import *
 from scipy.spatial import cKDTree
 from collections import OrderedDict
-import ruamel.yaml
+import yaml
+from typing import Optional
+from tqdm import tqdm
 
-yaml = ruamel.yaml.YAML()
+# yaml = ruamel.yaml.YAML()
 code_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(code_dir)
 # sys.path.append(f"{code_dir}/mycpp/build")
@@ -117,6 +119,79 @@ COLOR_MAP = np.array(
         [128, 192, 0],
     ]
 )
+
+
+GREEN = (0, 255, 0)
+PURPLE = (255, 51, 255)
+
+
+def load_yaml_matrix(file_path: str, key: str) -> np.ndarray:
+    """Load a matrix from a YAML file."""
+    with open(file_path) as file:
+        data = yaml.safe_load(file)
+    return np.array(data[key]["data"]).reshape(
+        -1, 4 if key == "tf_world_to_camera" else 3
+    )
+
+
+def annotate_and_save_single_frame(
+    frame, pose, target, video_writer, intrinsic_matrix, bbox
+):
+    annotated_frame = draw_axes_and_bbox(
+        frame, intrinsic_matrix, pose, bbox, line_color=GREEN
+    )
+
+    # if target pose is not set, skip drawing the target axes and bbox
+    if target is not None:
+        annotated_frame = draw_axes_and_bbox(
+            annotated_frame, intrinsic_matrix, target, bbox, line_color=PURPLE
+        )
+    video_writer.write(annotated_frame)
+
+
+def annotate_and_save_frames(
+    frames, poses, targets, video_writer, intrinsic_matrix, bbox
+):
+    """Add annotations to frames and save them to a video."""
+    print(f"There are total {len(frames)} frames.")
+    print("Annotating and saving video...")
+
+    for frame, cam_T_object, cam_T_target in tqdm(
+        zip(frames, poses, targets),
+        total=len(frames),
+        desc="Processing frames",
+        unit="frame",
+    ):
+        if frame is None:
+            continue
+
+        annotate_and_save_single_frame(
+            frame, cam_T_object, cam_T_target, video_writer, intrinsic_matrix, bbox
+        )
+
+
+def draw_axes_and_bbox(
+    frame: np.ndarray,
+    intrinsic_matrix: np.ndarray,
+    cam_T: np.ndarray,
+    bbox: np.ndarray,
+    axis_scale: float = 0.05,
+    line_color: Optional[np.ndarray] = None,
+    skip_bbox: bool = False,
+):
+    """Annotate a frame with axes and bounding box."""
+    annotated = draw_xyz_axis(
+        frame, ob_in_cam=cam_T, scale=axis_scale, K=intrinsic_matrix, thickness=2
+    )
+    if skip_bbox:
+        return annotated
+    return draw_posed_3d_box(
+        intrinsic_matrix,
+        img=annotated,
+        ob_in_cam=cam_T,
+        bbox=bbox,
+        line_color=line_color,
+    )
 
 
 def set_logging_format(level=logging.INFO):

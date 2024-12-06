@@ -150,6 +150,8 @@ if __name__ == "__main__":
     estimating = True
     time.sleep(3)  # Sleep for 3 seconds to allow the camera to warm up
 
+    checking_pose_estimation = True
+
     try:
         while estimating:
             start_time = time.perf_counter()
@@ -224,7 +226,7 @@ if __name__ == "__main__":
             cam_to_object[2, 3] -= 0.005
             obj_pose_in_world = world_T_cam @ cam_to_object
 
-            if debug >= 1:
+            if (debug == 0 and checking_pose_estimation) or debug >= 1:
                 os.makedirs(f"{debug_dir}/ob_in_cam", exist_ok=True)
                 np.savetxt(f"{debug_dir}/ob_in_cam/{i}.txt", pose.reshape(4, 4))
 
@@ -240,21 +242,13 @@ if __name__ == "__main__":
                     transparency=0,
                     is_input_rgb=True,
                 )
+                cv2.imshow("debug", vis[..., ::-1])
+                key = cv2.waitKey(1)
 
-                # world_T_object = np.eye(4)
-                # world_T_object[:3, 3] = np.array([-0.0325, 0.0325, 0.0325])
-                # cam_to_object_1 = cam_T_world @ world_T_object
-                # vis = draw_xyz_axis(
-                #     vis,
-                #     ob_in_cam=cam_to_object_1,
-                #     scale=0.1,
-                #     K=cam_K,
-                #     thickness=1,
-                #     transparency=0,
-                #     is_input_rgb=True,
-                # )
-                cv2.imshow("1", vis[..., ::-1])
-                cv2.waitKey(1)
+                # (Debug 0) Close GUI window after checking intial pose estimation is correct
+                if debug == 0 and (key == ord("q")):
+                    cv2.destroyWindow("debug")
+                    checking_pose_estimation = False
 
             if debug >= 2:
                 os.makedirs(f"{debug_dir}/track_vis", exist_ok=True)

@@ -34,6 +34,8 @@ class CubePoseLcmSubscriber:
 
     def _get_cube_pose(self) -> np.ndarray:
         cube_pose = np.eye(4)
+        if self.cube_pos is None or self.cube_orientation is None:
+            return None
         cube_pose[:3, :3] = self.cube_orientation
         cube_pose[:3, 3] = self.cube_pos
         return cube_pose
