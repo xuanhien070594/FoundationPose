@@ -42,7 +42,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mesh_file",
         type=str,
-        default=f"{code_dir}/../assets/cube/cube.obj",
+        default=f"cube/cube.obj",
     )
     parser.add_argument(
         "--intrinsic_params_file",
@@ -63,6 +63,8 @@ if __name__ == "__main__":
     set_logging_format()
     set_seed(0)
 
+    
+    args.mesh_file = f"{code_dir}/../assets/{args.mesh_file}"
     print(f"This is the mesh file: {args.mesh_file}")
     mesh = trimesh.load(args.mesh_file, process=False, maintain_order=True)
     print("Loaded mesh file")
